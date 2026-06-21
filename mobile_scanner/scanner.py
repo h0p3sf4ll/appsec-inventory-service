@@ -10,11 +10,12 @@ from typing import Any, Callable, Iterable
 
 from .activity import extract_repo_activity, parse_ado_datetime
 from .azure import AzureDevOpsClient
-from .constants import KNOWN_CATEGORIES, active_sheet_name, older_sheet_name
+from .constants import DEFAULT_ACTIVITY_MODE, KNOWN_CATEGORIES, active_sheet_name, older_sheet_name
 from .detection import detect_mobile_repo
 from .metadata import extract_mobile_metadata
 from .models import (
     AzureDevOpsError,
+    BranchScanTarget,
     DetectionEvidence,
     MobileAppMetadata,
     RepoActivityMetadata,
@@ -52,40 +53,81 @@ def scan(
 
         results: list[dict[str, Any]] = []
         repo_workers = max(1, min(config.max_workers, len(targets) or 1))
+        branch_workers = max(1, config.branch_workers)
         content_workers = max(1, config.content_workers)
         min_rank = confidence_rank(config.min_confidence)
 
         with (
             ThreadPoolExecutor(max_workers=repo_workers) as repo_executor,
+            ThreadPoolExecutor(max_workers=branch_workers) as branch_executor,
             ThreadPoolExecutor(max_workers=content_workers) as content_executor,
         ):
-            completed_scans = iter_completed_repo_scans(
+            completed_branch_lists = iter_completed_branch_target_lists(
                 repo_executor=repo_executor,
                 client=client,
                 targets=targets,
-                content_executor=content_executor,
                 max_in_flight=max(repo_workers * 4, repo_workers),
-                min_confidence_rank=min_rank,
-                max_commits_per_repo=config.max_commits_per_repo,
-                branch_age_days=config.branch_age_days,
-                store_client=store_client,
             )
+            pending_branch_scans: set[Future[dict[str, Any] | None]] = set()
+            submitted_branches = 0
+            completed_branches = 0
 
-            for index, future in completed_scans:
+            for repo_index, future in completed_branch_lists:
                 try:
-                    branch_results = future.result()
+                    branch_targets = future.result()
                 except Exception as exc:
-                    LOGGER.warning("Failed to scan repo: %s", exc)
+                    LOGGER.warning("Failed to list repo branches: %s", exc)
                     continue
 
-                for result in branch_results:
-                    results.append(result)
-                    if on_result:
-                        on_result(result)
-                    log_detected_result(result)
+                for branch_target in branch_targets:
+                    while len(pending_branch_scans) >= max(branch_workers * 4, branch_workers):
+                        completed_branches += drain_branch_scans(
+                            pending_branch_scans=pending_branch_scans,
+                            results=results,
+                            on_result=on_result,
+                            block=True,
+                        )
 
-                if index % 25 == 0:
-                    LOGGER.info("Progress: %s/%s repositories scanned", index, len(targets))
+                    pending_branch_scans.add(
+                        branch_executor.submit(
+                            scan_branch_target,
+                            client,
+                            branch_target,
+                            content_executor,
+                            min_rank,
+                            config.max_commits_per_repo,
+                            config.branch_age_days,
+                            config.activity_mode,
+                            store_client,
+                        )
+                    )
+                    submitted_branches += 1
+
+                completed_branches += drain_branch_scans(
+                    pending_branch_scans=pending_branch_scans,
+                    results=results,
+                    on_result=on_result,
+                    block=False,
+                )
+
+                if repo_index % 25 == 0:
+                    LOGGER.info(
+                        "Progress: %s/%s repositories listed; %s/%s branches scanned",
+                        repo_index,
+                        len(targets),
+                        completed_branches,
+                        submitted_branches,
+                    )
+
+            while pending_branch_scans:
+                completed_branches += drain_branch_scans(
+                    pending_branch_scans=pending_branch_scans,
+                    results=results,
+                    on_result=on_result,
+                    block=True,
+                )
+                if completed_branches % 100 == 0:
+                    LOGGER.info("Progress: %s/%s branches scanned", completed_branches, submitted_branches)
 
         results.sort(key=row_sort_key)
         LOGGER.info("Finished in %.1fs; found %s app branches", time.monotonic() - start, len(results))
@@ -96,6 +138,71 @@ def scan(
             store_client.close()
 
 
+def drain_branch_scans(
+    pending_branch_scans: set[Future[dict[str, Any] | None]],
+    results: list[dict[str, Any]],
+    on_result: Callable[[dict[str, Any]], None] | None,
+    block: bool,
+) -> int:
+    if not pending_branch_scans:
+        return 0
+
+    done, pending = wait(
+        pending_branch_scans,
+        timeout=0 if not block else None,
+        return_when=FIRST_COMPLETED,
+    )
+    pending_branch_scans.clear()
+    pending_branch_scans.update(pending)
+
+    for future in done:
+        result = handle_branch_scan_future(future, on_result)
+        if result:
+            results.append(result)
+
+    return len(done)
+
+
+def handle_branch_scan_future(
+    future: Future[dict[str, Any] | None],
+    on_result: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any] | None:
+    try:
+        result = future.result()
+    except Exception as exc:
+        LOGGER.warning("Failed to scan branch: %s", exc)
+        return None
+
+    if result and on_result:
+        on_result(result)
+    if result:
+        log_detected_result(result)
+    return result
+
+
+def scan_branch_target(
+    client: AzureDevOpsClient,
+    target: BranchScanTarget,
+    content_executor: ThreadPoolExecutor,
+    min_confidence_rank: int,
+    max_commits_per_repo: int,
+    branch_age_days: int,
+    activity_mode: str,
+    store_client: StoreLookupClient | None,
+) -> dict[str, Any] | None:
+    return scan_branch(
+        client=client,
+        target=RepoScanTarget(project_name=target.project_name, repo=target.repo),
+        branch_name=target.branch_name,
+        content_executor=content_executor,
+        min_confidence_rank=min_confidence_rank,
+        max_commits_per_repo=max_commits_per_repo,
+        branch_age_days=branch_age_days,
+        activity_mode=activity_mode,
+        store_client=store_client,
+    )
+
+
 def scan_repo(
     client: AzureDevOpsClient,
     target: RepoScanTarget,
@@ -104,7 +211,39 @@ def scan_repo(
     max_commits_per_repo: int,
     branch_age_days: int,
     store_client: StoreLookupClient | None,
+    activity_mode: str = DEFAULT_ACTIVITY_MODE,
 ) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for branch_target in list_branch_targets(client, target):
+        try:
+            row = scan_branch_target(
+                client=client,
+                target=branch_target,
+                content_executor=content_executor,
+                min_confidence_rank=min_confidence_rank,
+                max_commits_per_repo=max_commits_per_repo,
+                branch_age_days=branch_age_days,
+                activity_mode=activity_mode,
+                store_client=store_client,
+            )
+        except AzureDevOpsError as exc:
+            LOGGER.info(
+                "Skipping branch %s/%s@%s: %s",
+                branch_target.project_name,
+                branch_target.repo.get("name", ""),
+                branch_target.branch_name,
+                exc,
+            )
+            continue
+        if row:
+            rows.append(row)
+    return rows
+
+
+def list_branch_targets(
+    client: AzureDevOpsClient,
+    target: RepoScanTarget,
+) -> list[BranchScanTarget]:
     repo = target.repo
     repo_id = repo.get("id", "")
     repo_name = repo.get("name", "")
@@ -129,29 +268,20 @@ def scan_repo(
             return []
         raise
 
-    rows: list[dict[str, Any]] = []
+    branch_targets: list[BranchScanTarget] = []
     for ref in refs:
         branch_name = branch_name_from_ref(ref.get("name", ""))
         if not branch_name:
             continue
-        try:
-            row = scan_branch(
-                client=client,
-                target=target,
+        branch_targets.append(
+            BranchScanTarget(
+                project_name=target.project_name,
+                repo=repo,
                 branch_name=branch_name,
-                content_executor=content_executor,
-                min_confidence_rank=min_confidence_rank,
-                max_commits_per_repo=max_commits_per_repo,
-                branch_age_days=branch_age_days,
-                store_client=store_client,
             )
-        except AzureDevOpsError as exc:
-            LOGGER.info("Skipping branch %s/%s@%s: %s", target.project_name, repo_name, branch_name, exc)
-            continue
-        if row:
-            rows.append(row)
+        )
 
-    return rows
+    return branch_targets
 
 
 def scan_branch(
@@ -162,6 +292,7 @@ def scan_branch(
     min_confidence_rank: int,
     max_commits_per_repo: int,
     branch_age_days: int,
+    activity_mode: str,
     store_client: StoreLookupClient | None,
 ) -> dict[str, Any] | None:
     repo = target.repo
@@ -190,7 +321,14 @@ def scan_branch(
         LOGGER.debug("No match: %s/%s@%s", target.project_name, repo_name, branch_name)
         return None
 
-    activity = fetch_repo_activity(client, target.project_name, repo_id, branch_name, max_commits_per_repo)
+    activity = fetch_repo_activity(
+        client=client,
+        project_name=target.project_name,
+        repo_id=repo_id,
+        branch_name=branch_name,
+        max_commits=max_commits_per_repo,
+        activity_mode=activity_mode,
+    )
     categories = sorted({item.category for item in evidence})
 
     return build_scan_row(
@@ -315,18 +453,24 @@ def fetch_repo_activity(
     repo_id: str,
     branch_name: str,
     max_commits: int,
+    activity_mode: str,
 ) -> RepoActivityMetadata:
     try:
+        commit_limit = 1 if activity_mode == "latest" else max_commits
         commits = client.list_commits(
             project_name=project_name,
             repo_id=repo_id,
-            max_commits=max_commits,
+            max_commits=commit_limit,
             branch_name=branch_name,
         )
     except AzureDevOpsError as exc:
         LOGGER.info("Could not fetch commit activity for %s/%s@%s: %s", project_name, repo_id, branch_name, exc)
         return RepoActivityMetadata()
-    return extract_repo_activity(commits)
+
+    activity = extract_repo_activity(commits)
+    if activity_mode == "latest":
+        return RepoActivityMetadata(last_updated=activity.last_updated)
+    return activity
 
 
 def fetch_contents(
@@ -380,6 +524,42 @@ def collect_targets(client: AzureDevOpsClient, project_name: str | None) -> list
     return targets
 
 
+def iter_completed_branch_target_lists(
+    repo_executor: ThreadPoolExecutor,
+    client: AzureDevOpsClient,
+    targets: list[RepoScanTarget],
+    max_in_flight: int,
+) -> Iterable[tuple[int, Future[list[BranchScanTarget]]]]:
+    target_iter = iter(targets)
+    pending: set[Future[list[BranchScanTarget]]] = set()
+    submitted = 0
+    completed = 0
+
+    def submit_next() -> bool:
+        nonlocal submitted
+        try:
+            target = next(target_iter)
+        except StopIteration:
+            return False
+        pending.add(repo_executor.submit(list_branch_targets, client, target))
+        submitted += 1
+        return True
+
+    for _ in range(max(1, max_in_flight)):
+        if not submit_next():
+            break
+
+    while pending:
+        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+        for future in done:
+            completed += 1
+            yield completed, future
+
+        while len(pending) < max_in_flight and submitted < len(targets):
+            if not submit_next():
+                break
+
+
 def iter_completed_repo_scans(
     repo_executor: ThreadPoolExecutor,
     client: AzureDevOpsClient,
@@ -390,6 +570,7 @@ def iter_completed_repo_scans(
     max_commits_per_repo: int,
     branch_age_days: int,
     store_client: StoreLookupClient | None,
+    activity_mode: str = DEFAULT_ACTIVITY_MODE,
 ) -> Iterable[tuple[int, Future[list[dict[str, Any]]]]]:
     target_iter = iter(targets)
     pending: set[Future[list[dict[str, Any]]]] = set()
@@ -412,6 +593,7 @@ def iter_completed_repo_scans(
                 max_commits_per_repo,
                 branch_age_days,
                 store_client,
+                activity_mode,
             )
         )
         submitted += 1

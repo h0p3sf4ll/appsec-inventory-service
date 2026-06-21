@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 
 from .constants import (
+    DEFAULT_ACTIVITY_MODE,
     DEFAULT_BRANCH_AGE_DAYS,
+    DEFAULT_BRANCH_WORKERS,
     DEFAULT_CONTENT_WORKERS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_STORE_COUNTRY,
@@ -42,7 +44,13 @@ def parse_args(argv: list[str]) -> ScanConfig:
         "--max-workers",
         type=int,
         default=DEFAULT_MAX_WORKERS,
-        help=f"Maximum concurrent repository scans. Defaults to {DEFAULT_MAX_WORKERS}.",
+        help=f"Maximum concurrent repository branch-listing requests. Defaults to {DEFAULT_MAX_WORKERS}.",
+    )
+    parser.add_argument(
+        "--branch-workers",
+        type=int,
+        default=DEFAULT_BRANCH_WORKERS,
+        help=f"Maximum concurrent branch scans. Defaults to {DEFAULT_BRANCH_WORKERS}.",
     )
     parser.add_argument(
         "--content-workers",
@@ -81,6 +89,15 @@ def parse_args(argv: list[str]) -> ScanConfig:
         help=f"Age cutoff for workbook active/older branch sheets. Defaults to {DEFAULT_BRANCH_AGE_DAYS}.",
     )
     parser.add_argument(
+        "--activity-mode",
+        choices=("contributors", "latest"),
+        default=DEFAULT_ACTIVITY_MODE,
+        help=(
+            "Commit activity mode. Use contributors for full contributor extraction, "
+            "or latest for fast latest-commit-only activity. Defaults to contributors."
+        ),
+    )
+    parser.add_argument(
         "--store-lookup",
         action="store_true",
         help="Enable public Apple App Store and Google Play enrichment from detected app identifiers.",
@@ -109,11 +126,13 @@ def parse_args(argv: list[str]) -> ScanConfig:
         out_dir=args.out_dir,
         out_prefix=args.out_prefix,
         max_workers=args.max_workers,
+        branch_workers=args.branch_workers,
         content_workers=args.content_workers,
         max_commits_per_repo=args.max_commits_per_repo,
         timeout_seconds=args.timeout,
         min_confidence=args.min_confidence,
         branch_age_days=args.branch_age_days,
+        activity_mode=args.activity_mode,
         store_lookup=args.store_lookup,
         store_country=args.store_country.strip().upper(),
         store_timeout_seconds=args.store_timeout,
@@ -125,6 +144,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Missing Azure DevOps PAT. Set ADO_PAT or pass --pat.")
     if args.max_workers < 1:
         raise SystemExit("--max-workers must be at least 1.")
+    if args.branch_workers < 1:
+        raise SystemExit("--branch-workers must be at least 1.")
     if args.content_workers < 1:
         raise SystemExit("--content-workers must be at least 1.")
     if args.max_commits_per_repo < 0:

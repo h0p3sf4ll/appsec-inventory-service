@@ -329,6 +329,57 @@ class RepoActivityTests(unittest.TestCase):
         )
         self.assertEqual(activity.last_updated, "2024-05-02T08:30:15Z")
 
+    def test_fetch_repo_activity_latest_mode_only_requests_latest_commit(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def list_commits(self, **kwargs):
+                self.calls.append(kwargs)
+                return [
+                    {
+                        "author": {"name": "Alice Adams", "email": "alice@example.com"},
+                        "committer": {"date": "2024-05-02T08:30:15Z"},
+                    }
+                ]
+
+        client = FakeClient()
+
+        activity = scanner.fetch_repo_activity(
+            client=client,
+            project_name="Project",
+            repo_id="repo-id",
+            branch_name="main",
+            max_commits=0,
+            activity_mode="latest",
+        )
+
+        self.assertEqual(client.calls[0]["max_commits"], 1)
+        self.assertEqual(activity.contributing_developers, ())
+        self.assertEqual(activity.last_updated, "2024-05-02T08:30:15Z")
+
+    def test_fetch_repo_activity_contributors_mode_uses_requested_commit_limit(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def list_commits(self, **kwargs):
+                self.calls.append(kwargs)
+                return []
+
+        client = FakeClient()
+
+        scanner.fetch_repo_activity(
+            client=client,
+            project_name="Project",
+            repo_id="repo-id",
+            branch_name="main",
+            max_commits=250,
+            activity_mode="contributors",
+        )
+
+        self.assertEqual(client.calls[0]["max_commits"], 250)
+
 
 class OutputTests(unittest.TestCase):
     def sample_result(self):
@@ -542,6 +593,10 @@ class CliTests(unittest.TestCase):
                 "example",
                 "--pat",
                 "token",
+                "--branch-workers",
+                "24",
+                "--activity-mode",
+                "latest",
                 "--store-lookup",
                 "--store-country",
                 "ca",
@@ -550,6 +605,8 @@ class CliTests(unittest.TestCase):
             ]
         )
 
+        self.assertEqual(config.branch_workers, 24)
+        self.assertEqual(config.activity_mode, "latest")
         self.assertTrue(config.store_lookup)
         self.assertEqual(config.store_country, "CA")
         self.assertEqual(config.store_timeout_seconds, 7)
@@ -559,6 +616,10 @@ class CliTests(unittest.TestCase):
             scanner.parse_args(["--org", "example", "--pat", "token", "--store-country", "usa"])
         with self.assertRaises(SystemExit):
             scanner.parse_args(["--org", "example", "--pat", "token", "--store-timeout", "0"])
+
+    def test_parse_args_rejects_invalid_branch_workers(self):
+        with self.assertRaises(SystemExit):
+            scanner.parse_args(["--org", "example", "--pat", "token", "--branch-workers", "0"])
 
 
 if __name__ == "__main__":

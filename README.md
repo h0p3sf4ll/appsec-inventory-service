@@ -132,6 +132,19 @@ Only include medium and high confidence matches:
 mobile-app-inventory-tracer --org PepsiCoIT --out-dir reports --min-confidence medium
 ```
 
+Fast profile for very large organizations:
+
+```bash
+mobile-app-inventory-tracer \
+  --org PepsiCoIT \
+  --out-dir reports \
+  --min-confidence medium \
+  --max-workers 12 \
+  --branch-workers 32 \
+  --content-workers 32 \
+  --activity-mode latest
+```
+
 Enable public store enrichment:
 
 ```bash
@@ -195,12 +208,14 @@ The container runs as a non-root `scanner` user and writes to `/reports`.
 | `--pat` | No | `ADO_PAT` | Azure DevOps PAT; prefer the environment variable |
 | `--out-dir` | No | current directory | Output directory |
 | `--out-prefix` | No | `ado_mobile_repos` | Output filename prefix |
-| `--max-workers` | No | `8` | Concurrent repository scans |
+| `--max-workers` | No | `8` | Concurrent repository branch-listing requests |
+| `--branch-workers` | No | `16` | Concurrent branch scans |
 | `--content-workers` | No | `16` | Concurrent selected-file fetches |
 | `--max-commits-per-repo` | No | `0` | Commit history limit per matched branch; `0` means all available history |
 | `--timeout` | No | `30` | Azure DevOps HTTP timeout in seconds |
 | `--min-confidence` | No | `low` | Minimum detection confidence: `low`, `medium`, or `high` |
 | `--branch-age-days` | No | `90` | Active/older worksheet cutoff |
+| `--activity-mode` | No | `contributors` | `contributors` walks configured commit history; `latest` only fetches the latest commit |
 | `--store-lookup` | No | disabled | Enable public app store enrichment |
 | `--store-country` | No | `US` | Two-letter public store country code |
 | `--store-timeout` | No | `15` | Store lookup HTTP timeout in seconds |
@@ -283,11 +298,13 @@ config = ScanConfig(
     out_dir=Path("reports"),
     out_prefix="ado_mobile_repos",
     max_workers=8,
+    branch_workers=16,
     content_workers=16,
     max_commits_per_repo=2000,
     timeout_seconds=30,
     min_confidence="medium",
     branch_age_days=90,
+    activity_mode="contributors",
     store_lookup=True,
     store_country="US",
     store_timeout_seconds=15,
@@ -356,9 +373,17 @@ Start with:
 mobile-app-inventory-tracer --org PepsiCoIT --out-dir reports --max-workers 8 --content-workers 16 --min-confidence medium
 ```
 
-Increase `--max-workers` and `--content-workers` only if Azure DevOps responds quickly and throttling is not observed. Reduce them if you see `429`, timeout, or transient service errors.
+For very large organizations, the scanner uses three independent pools:
+
+- `--max-workers` lists repository branches
+- `--branch-workers` scans branches after they are listed
+- `--content-workers` fetches selected manifest and configuration files
+
+Increase concurrency only if Azure DevOps responds quickly and throttling is not observed. Reduce it if you see `429`, timeout, or transient service errors.
 
 Contributor extraction happens only after a branch passes detection. Use `--max-commits-per-repo` if full commit history is too expensive for large estates.
+
+Use `--activity-mode latest` for the fastest large-org inventory pass. It captures `last_updated` from the latest branch commit and leaves `contributing_developers` empty, avoiding full commit-history walks. Use `--activity-mode contributors` when the complete contributor column matters more than speed.
 
 Store lookup is also performed only after detection. Leave `--store-lookup` off for the fastest inventory scan.
 

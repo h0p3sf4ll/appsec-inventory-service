@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .constants import DEFAULT_BRANCH_AGE_DAYS, DEFAULT_STORE_COUNTRY, DEFAULT_STORE_TIMEOUT_SECONDS
+from .constants import (
+    DEFAULT_ACTIVITY_MODE,
+    DEFAULT_BRANCH_AGE_DAYS,
+    DEFAULT_BRANCH_WORKERS,
+    DEFAULT_STORE_COUNTRY,
+    DEFAULT_STORE_TIMEOUT_SECONDS,
+)
 
 
 class AzureDevOpsError(RuntimeError):
@@ -25,7 +31,9 @@ class ScanConfig:
     max_commits_per_repo: int
     timeout_seconds: int
     min_confidence: str
+    branch_workers: int = DEFAULT_BRANCH_WORKERS
     branch_age_days: int = DEFAULT_BRANCH_AGE_DAYS
+    activity_mode: str = DEFAULT_ACTIVITY_MODE
     store_lookup: bool = False
     store_country: str = DEFAULT_STORE_COUNTRY
     store_timeout_seconds: int = DEFAULT_STORE_TIMEOUT_SECONDS
@@ -35,6 +43,13 @@ class ScanConfig:
 class RepoScanTarget:
     project_name: str
     repo: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BranchScanTarget:
+    project_name: str
+    repo: dict[str, Any]
+    branch_name: str
 
 
 @dataclass(frozen=True)
