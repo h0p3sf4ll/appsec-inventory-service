@@ -1,8 +1,9 @@
 # AppSec Scan Router
 
-AppSec Scan Router is a Python SDK, CLI, and Docker image for mobile application inventory across Azure DevOps
-and GitHub Enterprise. It finds mobile app branches, extracts app metadata, captures ownership and activity
-signals, validates public store listings when requested, and writes Excel-ready reports while the scan is running.
+AppSec Scan Router is a Python SDK, CLI, browser UI, and Docker image for mobile application inventory across
+Azure DevOps and GitHub Enterprise. It finds mobile app branches, extracts app metadata, captures ownership and
+activity signals, validates public store listings when requested, and writes Excel-ready reports while the scan is
+running.
 
 The scanner is built for engineering, security, platform, and architecture leaders who need a current view of
 mobile code without cloning every repository or relying on loose keyword search.
@@ -26,6 +27,13 @@ mobile code without cloning every repository or relying on loose keyword search.
 
 ```bash
 python -m pip install appsec-scan-router
+```
+
+The package installs both runtime commands:
+
+```bash
+appsec-scan-router --help
+appsec-scan-router-ui --help
 ```
 
 For local development:
