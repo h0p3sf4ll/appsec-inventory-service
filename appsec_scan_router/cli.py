@@ -23,14 +23,25 @@ from .scanner import scan_to_reports
 def parse_args(argv: list[str]) -> ScanConfig:
     parser = argparse.ArgumentParser(
         prog="appsec-scan-router",
-        description="Identify mobile-specific Azure DevOps default or fallback branches.",
+        description="Identify mobile apps across Azure DevOps or GitHub Enterprise repositories.",
     )
-    parser.add_argument("--org", required=True, help="Azure DevOps organization name")
-    parser.add_argument("--project", help="Optional project name. Omit to scan all projects.")
+    parser.add_argument(
+        "--provider",
+        choices=("azure-devops", "github-enterprise"),
+        default=os.getenv("APPSEC_SCAN_PROVIDER", "azure-devops"),
+        help="Source provider. Defaults to azure-devops.",
+    )
+    parser.add_argument("--org", required=True, help="Azure DevOps organization or GitHub owner.")
+    parser.add_argument("--project", help="Azure DevOps project or GitHub repository name.")
+    parser.add_argument("--repo", help="GitHub repository name. Alias for --project.")
+    parser.add_argument(
+        "--base-url",
+        default=os.getenv("APPSEC_SCAN_BASE_URL") or os.getenv("GITHUB_API_URL") or os.getenv("GHE_API_URL") or "",
+        help="GitHub Enterprise API URL, for example https://github.example.com/api/v3.",
+    )
     parser.add_argument(
         "--pat",
-        default=os.getenv("ADO_PAT"),
-        help="Azure DevOps PAT. Prefer setting ADO_PAT instead of passing this on the command line.",
+        help="Provider token. Prefer ADO_PAT for Azure DevOps or GITHUB_TOKEN/GHE_TOKEN for GitHub Enterprise.",
     )
     parser.add_argument(
         "--out-dir",
@@ -121,11 +132,13 @@ def parse_args(argv: list[str]) -> ScanConfig:
 
     configure_logging(args.verbose)
     validate_args(args)
+    token = provider_token(args)
+    target_project = provider_project(args)
 
     return ScanConfig(
         org=args.org,
-        pat=args.pat,
-        project=args.project,
+        pat=token,
+        project=target_project,
         out_dir=args.out_dir,
         out_prefix=args.out_prefix,
         max_workers=args.max_workers,
@@ -139,12 +152,18 @@ def parse_args(argv: list[str]) -> ScanConfig:
         store_lookup=args.store_lookup,
         store_country=args.store_country.strip().upper(),
         store_timeout_seconds=args.store_timeout,
+        provider=args.provider,
+        base_url=args.base_url,
     )
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    if not args.pat:
-        raise SystemExit("Missing Azure DevOps PAT. Set ADO_PAT or pass --pat.")
+    if args.project and args.repo and args.project != args.repo:
+        raise SystemExit("--project and --repo cannot refer to different repositories.")
+    if not provider_token(args):
+        raise SystemExit(provider_token_message(args.provider))
+    if args.provider == "github-enterprise" and not args.base_url:
+        raise SystemExit("Missing GitHub Enterprise API URL. Set --base-url or GITHUB_API_URL.")
     if args.max_workers < 1:
         raise SystemExit("--max-workers must be at least 1.")
     if args.branch_workers < 1:
@@ -162,6 +181,24 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--store-country must be a two-letter country code.")
     if args.store_timeout < 1:
         raise SystemExit("--store-timeout must be at least 1.")
+
+
+def provider_project(args: argparse.Namespace) -> str | None:
+    return args.project or args.repo
+
+
+def provider_token(args: argparse.Namespace) -> str:
+    if args.pat:
+        return args.pat
+    if args.provider == "github-enterprise":
+        return os.getenv("GITHUB_TOKEN") or os.getenv("GHE_TOKEN") or ""
+    return os.getenv("ADO_PAT") or ""
+
+
+def provider_token_message(provider: str) -> str:
+    if provider == "github-enterprise":
+        return "Missing GitHub token. Set GITHUB_TOKEN, GHE_TOKEN, or pass --pat."
+    return "Missing Azure DevOps PAT. Set ADO_PAT or pass --pat."
 
 
 def configure_logging(verbose: bool) -> None:

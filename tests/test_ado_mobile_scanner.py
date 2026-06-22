@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import appsec_scan_router as scanner
 import ado_mobile_scanner
@@ -18,6 +19,88 @@ class PublicApiTests(unittest.TestCase):
         self.assertTrue(callable(scanner.scan_to_reports))
         self.assertTrue(callable(scanner.detect_mobile_repo))
         self.assertTrue(callable(scanner.AppSecScanRouter))
+        self.assertTrue(callable(scanner.GitHubEnterpriseClient))
+
+
+class ProviderClientTests(unittest.TestCase):
+    def test_normalizes_github_enterprise_api_urls(self):
+        self.assertEqual(scanner.normalize_github_api_url(""), "https://api.github.com")
+        self.assertEqual(
+            scanner.normalize_github_api_url("https://github.fabrikam.example"),
+            "https://github.fabrikam.example/api/v3",
+        )
+        self.assertEqual(
+            scanner.normalize_github_api_url("https://github.fabrikam.example/api/v3"),
+            "https://github.fabrikam.example/api/v3",
+        )
+
+    def test_normalizes_github_commits_for_activity_extraction(self):
+        commit = scanner.github_commit_to_activity_commit(
+            {
+                "commit": {
+                    "author": {
+                        "name": "Alice Adams",
+                        "email": "alice@example.com",
+                        "date": "2026-06-01T12:00:00Z",
+                    },
+                    "committer": {
+                        "name": "Build Service",
+                        "email": "build@example.com",
+                        "date": "2026-06-02T12:00:00Z",
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(commit["author"]["name"], "Alice Adams")
+        self.assertEqual(commit["author"]["email"], "alice@example.com")
+        self.assertEqual(commit["committer"]["date"], "2026-06-02T12:00:00Z")
+
+    def test_parse_args_supports_github_enterprise(self):
+        with patch.dict("os.environ", {"GITHUB_TOKEN": "token"}, clear=False):
+            config = scanner.parse_args(
+                [
+                    "--provider",
+                    "github-enterprise",
+                    "--base-url",
+                    "https://github.fabrikam.example/api/v3",
+                    "--org",
+                    "FabrikamCloud",
+                    "--repo",
+                    "mobile-app",
+                    "--out-dir",
+                    "reports",
+                ]
+            )
+
+        self.assertEqual(config.provider, "github-enterprise")
+        self.assertEqual(config.base_url, "https://github.fabrikam.example/api/v3")
+        self.assertEqual(config.org, "FabrikamCloud")
+        self.assertEqual(config.project, "mobile-app")
+        self.assertEqual(config.pat, "token")
+
+    def test_create_source_client_supports_github_enterprise(self):
+        config = scanner.ScanConfig(
+            org="FabrikamCloud",
+            pat="token",
+            project="mobile-app",
+            out_dir=Path("reports"),
+            out_prefix="scan",
+            max_workers=1,
+            content_workers=1,
+            max_commits_per_repo=0,
+            timeout_seconds=30,
+            min_confidence="low",
+            provider="github-enterprise",
+            base_url="https://github.fabrikam.example",
+        )
+
+        client = scanner.create_source_client(config)
+        try:
+            self.assertIsInstance(client, scanner.GitHubEnterpriseClient)
+            self.assertEqual(client.base_url, "https://github.fabrikam.example/api/v3")
+        finally:
+            client.close()
 
 
 class DetectionTests(unittest.TestCase):

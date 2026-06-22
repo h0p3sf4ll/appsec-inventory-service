@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "appsec-scan-router"
-version = "1.0.1"
-description = "SDK and CLI for routing Azure DevOps mobile app inventory scans with optional public store validation"
+version = "1.1.0"
+description = "SDK and CLI for routing mobile app inventory scans across Azure DevOps and GitHub Enterprise"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -15,6 +15,7 @@ keywords = [
     "appsec",
     "sdk",
     "azure-devops",
+    "github-enterprise",
     "mobile",
     "inventory",
     "android",

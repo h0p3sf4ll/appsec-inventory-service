@@ -20,6 +20,7 @@ from .constants import (
     older_sheet_name,
 )
 from .detection import detect_mobile_repo
+from .github import GitHubEnterpriseClient
 from .metadata import extract_mobile_metadata
 from .models import (
     AzureDevOpsError,
@@ -52,7 +53,7 @@ def scan(
     on_result: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     start = time.monotonic()
-    client = AzureDevOpsClient(config.org, config.pat, config.timeout_seconds)
+    client = create_source_client(config)
     store_client = create_store_client(config)
     try:
         targets = collect_targets(client, config.project)
@@ -143,6 +144,17 @@ def scan(
         client.close()
         if store_client:
             store_client.close()
+
+
+def create_source_client(config: ScanConfig) -> AzureDevOpsClient | GitHubEnterpriseClient:
+    if config.provider == "github-enterprise":
+        return GitHubEnterpriseClient(
+            base_url=config.base_url,
+            owner=config.org,
+            token=config.pat,
+            timeout_seconds=config.timeout_seconds,
+        )
+    return AzureDevOpsClient(config.org, config.pat, config.timeout_seconds)
 
 
 def drain_branch_scans(

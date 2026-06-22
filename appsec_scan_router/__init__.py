@@ -34,6 +34,12 @@ from .detection import (
     collect_path_evidence,
     detect_mobile_repo,
 )
+from .github import (
+    GITHUB_DEPLOYMENT_ENVIRONMENTS,
+    GitHubEnterpriseClient,
+    github_commit_to_activity_commit,
+    normalize_github_api_url,
+)
 from .metadata import (
     collect_android_strings,
     collect_metadata_properties,
@@ -73,6 +79,7 @@ from .scanner import (
     branch_names_from_build_definitions,
     branch_names_from_refs,
     collect_targets,
+    create_source_client,
     default_branch_name_from_repo,
     drain_branch_scans,
     extract_branch_values,
@@ -158,6 +165,8 @@ __all__ = [
     "FALLBACK_BRANCH_PRIORITY",
     "BranchScanTarget",
     "DetectionEvidence",
+    "GITHUB_DEPLOYMENT_ENVIRONMENTS",
+    "GitHubEnterpriseClient",
     "KNOWN_CATEGORIES",
     "MobileAppMetadata",
     "MetaTagParser",
@@ -195,6 +204,7 @@ __all__ = [
     "collect_targets",
     "configure_logging",
     "confidence_rank",
+    "create_source_client",
     "detect_mobile_repo",
     "default_branch_name_from_repo",
     "developer_identity_key",
@@ -211,6 +221,7 @@ __all__ = [
     "fetch_repo_activity",
     "format_ado_datetime",
     "format_developer",
+    "github_commit_to_activity_commit",
     "handle_branch_scan_future",
     "identifier_status",
     "google_play_app_page",
@@ -247,6 +258,7 @@ __all__ = [
     "parse_pubspec",
     "parse_xcode_settings_metadata",
     "normalize_google_play_title",
+    "normalize_github_api_url",
     "regex_value",
     "resolve_property_value",
     "pipeline_fallback_branch_name",

@@ -37,6 +37,8 @@ class ScanConfig:
     store_lookup: bool = False
     store_country: str = DEFAULT_STORE_COUNTRY
     store_timeout_seconds: int = DEFAULT_STORE_TIMEOUT_SECONDS
+    provider: str = "azure-devops"
+    base_url: str = ""
 
 
 @dataclass(frozen=True)
